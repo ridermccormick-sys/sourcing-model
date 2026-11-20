@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# Investment thesis. Edit this to match your firm. The free-text description
+# becomes a similarity feature; keywords drive features and hard-filter flags.
+# ---------------------------------------------------------------------------
+thesis:
+  description: >
+    Vertical B2B software platforms that are the system of record for a
+    specific industry such as healthcare practices, construction, property
+    management, insurance, legal, logistics, field services or manufacturing.
+    Mission critical workflow, scheduling, billing, payments and compliance
+    software sold to businesses, with recurring subscription revenue,
+    enterprise readiness, a growing sales and customer success team, and
+    capital efficient growth.
+  include_keywords: [vertical, industry, practice management, compliance, workflow,
+                     billing, payments, scheduling, system of record, platform,
+                     subscription, enterprise, operators, field service]
+  exclude_keywords: [crypto, blockchain, nft, casino, gambling, cannabis, dating app,
+                     staffing agency, marketing agency, shop now, add to cart]
+
+# Hard constraints. Companies that violate these get a flag and are ranked
+# below eligible companies (they are not deleted).
+filters:
+  founded_year_min: 2008
+  founded_year_max: 2022
+  employees_min: 25
+  employees_max: 1500
+  max_series: C          # flag companies that disclose Series D or later
+
+scrape:
+  user_agent: "Mozilla/5.0 (compatible; company-research-bot/0.1)"
+  max_pages_per_company: 8
+  request_timeout_s: 15
+  per_host_delay_s: 1.5
+  workers: 8
+  cache_dir: data/cache
+  fetch_ats_jobs: true    # use public Greenhouse/Lever/Ashby/Workable job-board APIs
+
+model:
+  classifier: blend       # gbm | logreg | blend
+  n_bags: 40
+  unlabeled_ratio: 3.0    # unlabeled sampled per bag = ratio * n_positives
+  negative_weight: 2.0    # weight on explicit "passed - off thesis" negatives
+  svd_components: 48
+  cv_folds: 5
+  explain_top_n: 250
+  random_state: 7

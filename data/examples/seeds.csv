@@ -1,0 +1,6 @@
+domain,label,note
+# label: 1 = portfolio / actively pursued / "exactly what we want"
+#        0 = passed because OFF-THESIS (not because of price or competition)
+yourportfoliocompany.com,1,portfolio
+anotherfit.com,1,pursued 2024
+offthesis.com,0,consumer - passed
