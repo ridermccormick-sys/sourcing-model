@@ -50,6 +50,21 @@ ATS = {
                  "https://apply.workable.com/api/v1/widget/accounts/{}", lambda j: [x["title"] for x in j.get("jobs", [])]),
 }
 ATS_IGNORE = {"embed", "js", "api", "v1", "jobs", "j"}
+WAYBACK_RE = re.compile(r"^/web/\d+[a-z_]*/(https?://.+)$")
+
+
+def unwrap(url: str) -> str:
+    """For a Wayback Machine URL, return the archived original URL; otherwise the URL itself."""
+    u = urlparse(url)
+    if u.netloc.endswith("web.archive.org"):
+        m = WAYBACK_RE.match(u.path + (("?" + u.query) if u.query else ""))
+        if m:
+            return m.group(1)
+    return url
+
+
+def site_of(url: str) -> str:
+    return urlparse(unwrap(url)).netloc.lower().removeprefix("www.")
 
 
 class Crawler:
@@ -129,7 +144,7 @@ class Crawler:
 
     @staticmethod
     def classify(url: str) -> str | None:
-        path = urlparse(url).path.lower().strip("/")
+        path = urlparse(unwrap(url)).path.lower().strip("/")
         if not path or path.count("/") > 1:
             return None
         segs = path.split("/")
@@ -154,11 +169,15 @@ class Crawler:
         return None
 
     # -- company --------------------------------------------------------------------
-    def crawl(self, domain: str, name: str | None = None) -> dict:
+    def crawl(self, domain: str, name: str | None = None, start_url: str | None = None) -> dict:
+        """start_url overrides where to start: a subdomain, a new domain, or a Wayback Machine
+        snapshot (https://web.archive.org/web/2023/https://acme.com) for acquired companies."""
         rec = {"domain": domain, "name": name or domain.split(".")[0].title(), "pages": [], "jobs": None,
-               "fetched_at": datetime.now(timezone.utc).isoformat(), "error": None}
+               "fetched_at": datetime.now(timezone.utc).isoformat(), "error": None,
+               "start_url": start_url, "redirected_to": None}
         home_html, home_url = None, None
-        for candidate in (f"https://{domain}", f"https://www.{domain}", f"http://{domain}"):
+        candidates = [start_url] if start_url else [f"https://{domain}", f"https://www.{domain}", f"http://{domain}"]
+        for candidate in candidates:
             home_html, home_url = self.get(candidate)
             if home_html:
                 break
@@ -171,11 +190,15 @@ class Crawler:
         if not name and home["title"]:
             rec["name"] = re.split(r"\s[|\-–—:]\s", home["title"])[0].strip()[:80] or rec["name"]
 
-        site = urlparse(home_url).netloc.removeprefix("www.")
+        site = site_of(home_url)
+        expected = site_of(start_url) if start_url else domain
+        if site != expected and not site.endswith("." + expected) and not expected.endswith("." + site):
+            rec["redirected_to"] = site
+            log.warning("%s redirects to %s; the scraped content is %s's site, not %s's. If it was acquired, "
+                        "set a Wayback Machine snapshot in the 'url' column.", domain, site, site, domain)
         chosen: dict[str, str] = {}
         for link in home["links"]:
-            u = urlparse(link)
-            if u.netloc.removeprefix("www.") != site:
+            if site_of(link) != site:
                 continue
             kind = self.classify(link)
             if kind and kind not in chosen:
@@ -197,26 +220,32 @@ class Crawler:
         return rec
 
 
-def crawl_universe(universe: list[tuple[str, str | None]], cfg: dict, out_path: str | Path,
+def crawl_universe(universe: list[tuple[str, str | None, str | None]], cfg: dict, out_path: str | Path,
                    skip_existing: bool = True) -> int:
+    """universe: (domain, name, start_url) tuples; name and start_url may be None."""
     out_path = Path(out_path)
     done = set()
     if skip_existing and out_path.exists():
         done = {json.loads(l)["domain"] for l in out_path.read_text().splitlines() if l.strip()}
-    todo = [(d, n) for d, n in universe if d not in done]
+    todo = [t for t in universe if t[0] not in done]
     log.info("crawling %d companies (%d already done)", len(todo), len(done))
     crawler = Crawler(cfg)
-    n_ok = 0
+    n_ok, redirected = 0, []
     with open(out_path, "a") as f, ThreadPoolExecutor(cfg["scrape"]["workers"]) as ex:
-        futs = {ex.submit(crawler.crawl, d, n): d for d, n in todo}
+        futs = {ex.submit(crawler.crawl, d, n, u): d for d, n, u in todo}
         for i, fut in enumerate(as_completed(futs), 1):
             try:
                 rec = fut.result()
             except Exception as e:  # never let one site kill the run
                 rec = {"domain": futs[fut], "pages": [], "jobs": None, "error": repr(e)}
             n_ok += rec["error"] is None
+            if rec.get("redirected_to"):
+                redirected.append(f"{rec['domain']} -> {rec['redirected_to']}")
             f.write(json.dumps(rec) + "\n")
             f.flush()
             if i % 25 == 0 or i == len(todo):
                 log.info("  %d/%d crawled (%d ok)", i, len(todo), n_ok)
+    if redirected:
+        log.warning("%d domains redirected to a different site (review these, especially seeds):\n  %s",
+                    len(redirected), "\n  ".join(redirected))
     return n_ok

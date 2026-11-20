@@ -37,3 +37,31 @@ def test_classify():
     assert Crawler.classify("https://a.com/company/about-us") == "about"
     assert Crawler.classify("https://a.com/blog/2024/a-long-post") is None
     assert Crawler.classify("https://a.com/") is None
+
+
+WB = "https://web.archive.org/web/20230601000000/https://visuallease.com"
+ARCHIVE = {
+    WB: """<html><title>Visual Lease | Lease accounting software</title><body>
+        <a href="/web/20230601000000/https://visuallease.com/about">About</a>
+        <a href="/web/20230601000000/https://visuallease.com/pricing">Pricing</a>
+        <a href="/web/20230601000000/https://twitter.com/vl">tw</a>
+        Lease administration software. Request a demo.</body></html>""",
+    WB + "/about": "<html><body>Founded in 2001.</body></html>",
+    WB + "/pricing": "<html><body>Contact sales</body></html>",
+}
+
+
+def test_wayback_snapshot_for_acquired_company(tmp_path, monkeypatch):
+    c = Crawler({"scrape": dict(CFG["scrape"], cache_dir=str(tmp_path))})
+    monkeypatch.setattr(c, "get", lambda url, check_robots=True: (ARCHIVE.get(url), url))
+    r = c.crawl("visuallease.com", start_url=WB)
+    assert r["redirected_to"] is None
+    assert {p["kind"] for p in r["pages"]} == {"home", "about", "pricing"}
+
+
+def test_redirect_to_acquirer_is_flagged(tmp_path, monkeypatch):
+    c = Crawler({"scrape": dict(CFG["scrape"], cache_dir=str(tmp_path))})
+    monkeypatch.setattr(c, "get", lambda url, check_robots=True:
+                        ("<html><title>CoStar</title><body>hi</body></html>", "https://www.costar.com/"))
+    r = c.crawl("visuallease.com")
+    assert r["redirected_to"] == "costar.com"

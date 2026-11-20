@@ -42,12 +42,15 @@ def _print_cv(cv: dict | None):
 def cmd_scrape(a):
     from .scrape import crawl_universe
     cfg = _cfg(a.config)
-    u = pd.read_csv(a.universe, comment="#")
-    names = u["name"] if "name" in u else [None] * len(u)
-    universe = [(pipeline.normalize_domain(d), (n if isinstance(n, str) else None)) for d, n in zip(u["domain"], names)]
+    def rows(df):
+        col = lambda c: df[c] if c in df else [None] * len(df)
+        txt = lambda v: v.strip() if isinstance(v, str) and v.strip() else None
+        return [(pipeline.normalize_domain(d), txt(n), txt(url)) for d, n, url in zip(df["domain"], col("name"), col("url"))]
+
+    universe = rows(pd.read_csv(a.universe, comment="#"))
     if a.seeds:  # seeds must be scraped too, so the model can learn from them
-        s = pipeline.load_seeds(a.seeds)
-        universe += [(d, None) for d in s["domain"] if d not in {x for x, _ in universe}]
+        have = {t[0] for t in universe}
+        universe += [t for t in rows(pipeline.load_seeds(a.seeds)) if t[0] not in have]
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     ok = crawl_universe(universe, cfg, a.out)
     print(f"done: {ok} companies crawled successfully -> {a.out}")

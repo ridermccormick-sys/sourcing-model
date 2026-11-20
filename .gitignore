@@ -3,3 +3,9 @@ data/cache/
 data/*.jsonl
 models/
 output/
+
+# confidential deal data - never commit
+seeds*.csv
+!data/examples/seeds.csv
+universe*.csv
+!data/examples/universe.csv

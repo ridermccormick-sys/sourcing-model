@@ -23,6 +23,8 @@ python -m pytest -q
 2. **Build `seeds.csv`** (`domain,label,note`):
    * `1`: portfolio companies, companies you term-sheeted or ran deep diligence on, and companies you lost but would have backed. Aim for **30–100**. More, and more varied, positives are the biggest lever on quality.
    * `0`: companies you passed on **because they were off-thesis**. Leave out passes for price, competition or timing. Those were good fits, so labeling them 0 would teach the model the wrong thing.
+   * Optional `url` column: where to start crawling, when that differs from `https://<domain>`. Use it for a subdomain (`https://site.acme.com/`) or, for an **acquired company whose domain now redirects to the buyer**, a Wayback Machine snapshot from before the deal: `https://web.archive.org/web/20220101/https://acme.com/`. The scraper logs a warning for every domain that redirects to a different site. Check that list after each scrape. The same column works in `universe.csv`.
+   * `seeds*.csv` and `universe*.csv` are git-ignored, because they hold confidential deal data.
 3. **Build `universe.csv`** (`domain,name`) from any lists of candidate companies: G2/Capterra category pages, conference exhibitor and sponsor lists, industry association member directories, Inc. 5000 / Deloitte Fast 500, state SaaS lists, YC and accelerator directories, and portfolio pages of seed and Series A funds. More breadth is better; the model does the filtering.
 4. Run:
    ```bash
