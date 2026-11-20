@@ -16,9 +16,9 @@ thesis:
                      bootstrapped, founder-led, profitable, customers,
                      integrations, enterprise, mid-market]
   exclude_keywords: [crypto, blockchain, nft, casino, gambling, cannabis,
-                     dating app, consumer app, marketplace, hardware,
-                     staffing agency, marketing agency, consulting firm,
-                     shop now, add to cart, series d, series e]
+                     dating app, consumer app, two-sided marketplace,
+                     hardware manufacturer, staffing agency, marketing agency,
+                     consulting firm, shop now, add to cart]
 
 filters:
   founded_year_min: 2005
