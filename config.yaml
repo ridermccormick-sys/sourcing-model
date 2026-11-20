@@ -4,27 +4,28 @@
 # ---------------------------------------------------------------------------
 thesis:
   description: >
-    Vertical B2B software platforms that are the system of record for a
-    specific industry such as healthcare practices, construction, property
-    management, insurance, legal, logistics, field services or manufacturing.
-    Mission critical workflow, scheduling, billing, payments and compliance
-    software sold to businesses, with recurring subscription revenue,
-    enterprise readiness, a growing sales and customer success team, and
-    capital efficient growth.
-  include_keywords: [vertical, industry, practice management, compliance, workflow,
-                     billing, payments, scheduling, system of record, platform,
-                     subscription, enterprise, operators, field service]
-  exclude_keywords: [crypto, blockchain, nft, casino, gambling, cannabis, dating app,
-                     staffing agency, marketing agency, shop now, add to cart]
+    Founder-led, bootstrapped or lightly funded B2B software companies
+    raising their first institutional capital. Niche, mission critical SaaS
+    sold to businesses (often a vertical or a specific function such as
+    finance, compliance, HR, or operations), with high recurring revenue,
+    strong retention, and capital efficient growth. The company has proven
+    product-market fit, is profitable or near breakeven, and is ready to
+    scale sales, marketing, and pricing with an operating partner.
+  include_keywords: [b2b, saas, software, subscription, recurring, platform,
+                     workflow, compliance, vertical, system of record,
+                     bootstrapped, founder-led, profitable, customers,
+                     integrations, enterprise, mid-market]
+  exclude_keywords: [crypto, blockchain, nft, casino, gambling, cannabis,
+                     dating app, consumer app, marketplace, hardware,
+                     staffing agency, marketing agency, consulting firm,
+                     shop now, add to cart, series d, series e]
 
-# Hard constraints. Companies that violate these get a flag and are ranked
-# below eligible companies (they are not deleted).
 filters:
-  founded_year_min: 2008
-  founded_year_max: 2022
-  employees_min: 25
-  employees_max: 1500
-  max_series: C          # flag companies that disclose Series D or later
+  founded_year_min: 2005
+  founded_year_max: 2021
+  employees_min: 20
+  employees_max: 300
+  max_series: A          # flag companies with Series B or later (GSP prefers little prior VC)
 
 scrape:
   user_agent: "Mozilla/5.0 (compatible; company-research-bot/0.1)"
