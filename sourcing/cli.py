@@ -47,10 +47,14 @@ def cmd_scrape(a):
         txt = lambda v: v.strip() if isinstance(v, str) and v.strip() else None
         return [(pipeline.normalize_domain(d), txt(n), txt(url)) for d, n, url in zip(df["domain"], col("name"), col("url"))]
 
-    universe = rows(pd.read_csv(a.universe, comment="#"))
-    if a.seeds:  # seeds must be scraped too, so the model can learn from them
-        have = {t[0] for t in universe}
-        universe += [t for t in rows(pipeline.load_seeds(a.seeds)) if t[0] not in have]
+    merged: dict[str, tuple] = {}
+    for d, n, url in rows(pd.read_csv(a.universe, comment="#")):
+        merged.setdefault(d, (d, n, url))
+    if a.seeds:  # seeds must be scraped too; a seed's name/url wins over the universe row
+        for d, n, url in rows(pipeline.load_seeds(a.seeds)):
+            _, n0, u0 = merged.get(d, (d, None, None))
+            merged[d] = (d, n or n0, url or u0)
+    universe = list(merged.values())
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     ok = crawl_universe(universe, cfg, a.out)
     print(f"done: {ok} companies crawled successfully -> {a.out}")

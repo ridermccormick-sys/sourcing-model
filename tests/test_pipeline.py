@@ -17,3 +17,18 @@ def test_end_to_end_beats_random():
     assert ranked["why"].iloc[0] != ""
     m = ranked.merge(truth, on="domain")
     assert m.head(30)["true_fit"].mean() > m["true_fit"].mean()
+
+
+def test_scrape_cli_seed_url_overrides_universe(tmp_path, monkeypatch):
+    import sourcing.scrape as sc
+    from sourcing import cli
+    (tmp_path / "u.csv").write_text("domain,name,url,source\nacme.com,,,x\nbeta.com,Beta,,x\n")
+    (tmp_path / "s.csv").write_text("domain,label,url,note\nacme.com,1,https://web.archive.org/web/2022/https://acme.com/,n\n"
+                                    "gamma.com,0,,n\n")
+    cap = {}
+    monkeypatch.setattr(sc, "crawl_universe", lambda u, cfg, out: cap.setdefault("u", u) and 0)
+    cli.main(["scrape", "--universe", str(tmp_path / "u.csv"), "--seeds", str(tmp_path / "s.csv"),
+              "--out", str(tmp_path / "o.jsonl")])
+    got = {d: (n, u) for d, n, u in cap["u"]}
+    assert got == {"acme.com": (None, "https://web.archive.org/web/2022/https://acme.com/"),
+                   "beta.com": ("Beta", None), "gamma.com": (None, None)}
