@@ -42,12 +42,20 @@ BOOTSTRAP_TERMS = ["bootstrapped", "self-funded", "profitable since", "customer-
                    "never raised", "profitable and growing"]
 
 NUM = r"(\d{1,3}(?:,\d{3})+|\d+)"
-FOUNDED_RE = re.compile(r"(?:founded|established|started|launched|since)\s+(?:in\s+)?((?:19|20)\d{2})")
+# Founding year: only explicit statements. A bare "since 1986" is usually a customer
+# testimonial ("a shop owner since 1986"), not the company's own founding.
+FOUNDED_RE = re.compile(r"(?:founded|established|incorporated|in business since|serving [a-z ]{1,30} since)"
+                        r"[:\s]+(?:in\s+|back\s+in\s+)?((?:19|20)\d{2})\b")
 SERIES_RE = re.compile(r"series\s+([a-h])\b")
 RAISED_RE = re.compile(r"(?:raised|raises|secured|closed|closes|announces)\s+(?:a\s+|an\s+)?"
                        r"\$\s?(\d+(?:\.\d+)?)\s?(m|mm|million|b|bn|billion)\b")
-EMP_RE = re.compile(NUM + r"\+?\s+(?:employees|people|team members|teammates|staff|person team)")
-TEAM_OF_RE = re.compile(r"team of\s+(?:over\s+|more than\s+)?" + NUM)
+# Headcount: the company's own team only. "20,000 people use X" and "companies with
+# 500 employees" (common on HR software sites) describe customers, not the company.
+EMP_RE = re.compile(r"(?:(?:our|a|the)\s+(?:team|company)\s+of\s+(?:over\s+|more than\s+|nearly\s+|about\s+)?" + NUM
+                    + r"|" + NUM + r"\+?\s*(?:full[- ]time\s+)?(?:employees|team members|teammates|employee[- ]owners)"
+                    + r"|" + NUM + r"[- ]person team|employs\s+(?:over\s+|more than\s+)?" + NUM + r")")
+EMP_CUSTOMER_CONTEXT = re.compile(r"(?:with|up to|manage|managing|for|of|companies|businesses|organizations|serving|"
+                                  r"support|engage|track|pay|onboard|over|from|to|and|per|every|your)\s*$")
 CUST_RE = re.compile(NUM + r"\+?\s+(?:customers|companies|businesses|organizations|clients|"
                      r"practices|firms|teams|locations|agencies|contractors|clinics)")
 COPYRIGHT_RE = re.compile(r"(?:©|\(c\)|copyright)\s*(?:(?:19|20)\d{2}\s*[-–]\s*)?((?:19|20)\d{2})")
@@ -81,6 +89,33 @@ def _count(text: str, terms: list[str]) -> int:
 
 def _to_int(s: str) -> int:
     return int(s.replace(",", ""))
+
+
+def _employees(texts: list[str]) -> float:
+    """First page (in priority order) that states the company's own headcount wins."""
+    for text in texts:
+        vals = []
+        for m in EMP_RE.finditer(text):
+            num = next(g for g in m.groups() if g)
+            v = _to_int(num)
+            if "," not in num and 1900 <= v <= 2100:
+                continue  # a year, e.g. "(c) 2026 ... employees"
+            before = text[max(0, m.start() - 25):m.start()]
+            if not m.group(0).startswith(("our", "a ", "the", "employs")) and EMP_CUSTOMER_CONTEXT.search(before):
+                continue
+            if 2 <= v <= 100_000:
+                vals.append(v)
+        if vals:
+            return float(max(vals))
+    return NAN
+
+
+def _founded(texts: list[str]) -> float:
+    for text in texts:
+        years = [int(y) for y in FOUNDED_RE.findall(text) if 1900 <= int(y) <= CURRENT_YEAR]
+        if years:
+            return float(min(years))
+    return NAN
 
 
 def _max_match(regex: re.Pattern, text: str, lo: int, hi: int) -> float:
@@ -118,13 +153,11 @@ def extract_signals(record: dict) -> dict:
             raised.append(v)
     raised_m = max(raised) if raised else NAN
 
-    founded = [int(y) for y in FOUNDED_RE.findall(full) if 1950 <= int(y) <= CURRENT_YEAR]
-    founded_year = float(min(founded)) if founded else NAN
-
-    employees = _max_match(EMP_RE, full, 2, 300_000)
-    team_of = _max_match(TEAM_OF_RE, full, 2, 300_000)
-    if employees != employees or (team_of == team_of and team_of > employees):
-        employees = team_of
+    # Facts about the company itself: trust the about page first, then home/careers.
+    # News and blog pages often describe customers, partners or acquirers.
+    own = [by_kind.get(k, "").lower() for k in ("about", "home", "careers")]
+    founded_year = _founded(own)
+    employees = _employees(own)
     customers = _max_match(CUST_RE, full, 5, 50_000_000)
 
     copyright_years = [int(y) for y in COPYRIGHT_RE.findall(full) if int(y) <= CURRENT_YEAR]

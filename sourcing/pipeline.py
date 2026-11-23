@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 
-from .features import FEATURE_LABELS, Featurizer
+from .features import FEATURE_LABELS, MISSING_LABELS, Featurizer, display_name
 from .model import PUBagger, cross_validate_pu, explain
 from .signals import series_letter_to_int
 
@@ -84,7 +84,7 @@ def train(records: list[dict], seeds: pd.DataFrame, cfg: dict, run_cv: bool = Tr
         "columns": list(X.columns),
         "background": np.nanmedian(X.values[y == -1], axis=0),
         "seed_labels": dict(zip(seeds["domain"], seeds["label"])),
-        "seed_pos_names": [r.get("name") or r["domain"] for r in pos],
+        "seed_pos_names": [display_name(r.get("name"), r["domain"]) for r in pos],
         "seed_pos_tfidf": feat.text_matrix(pos),
         "cv_metrics": cv,
         "config": cfg,
@@ -122,7 +122,7 @@ def score(records: list[dict], artifact: dict, include_seeds: bool = False) -> p
 
     df = pd.DataFrame({
         "domain": [r["domain"] for r in records],
-        "name": [r.get("name") or r["domain"] for r in records],
+        "name": [display_name(r.get("name"), r["domain"]) for r in records],
         "fit_score": fit_score.round(1),
         "model_probability": p.round(4),
         "seed_label": [seed_labels.get(r["domain"], "") for r in records],
@@ -154,10 +154,18 @@ def score(records: list[dict], artifact: dict, include_seeds: bool = False) -> p
     top_idx = df.index[:n].to_numpy()
     groups = feat.feature_groups(artifact["columns"])
     expl = explain(model, X.values[top_idx], groups, artifact["background"])
+    col = {c: i for i, c in enumerate(artifact["columns"])}
+
+    def label(g: str, row: int) -> str:
+        if g in col and X.values[row, col[g]] != X.values[row, col[g]]:  # NaN = not on the site
+            return MISSING_LABELS.get(g, f"{FEATURE_LABELS.get(g, g)}: not disclosed")
+        return FEATURE_LABELS.get(g, g)
+
     why, drag = [""] * len(df), [""] * len(df)
     for k, (ups, dn) in enumerate(expl):
-        why[k] = " | ".join(f"{FEATURE_LABELS.get(g, g)} (+{d:.2f})" for g, d in ups)
-        drag[k] = f"{FEATURE_LABELS.get(dn[0], dn[0])} ({dn[1]:.2f})" if dn else ""
+        row = top_idx[k]
+        why[k] = " | ".join(f"{label(g, row)} (+{d:.2f})" for g, d in ups)
+        drag[k] = f"{label(dn[0], row)} ({dn[1]:.2f})" if dn else ""
     df["why"] = why
     df["biggest_drag"] = drag
     df.insert(0, "rank", np.arange(1, len(df) + 1))
