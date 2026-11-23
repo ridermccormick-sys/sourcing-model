@@ -29,6 +29,7 @@ python -m pytest -q
 4. Run:
    ```bash
    python -m sourcing.cli scrape --universe universe.csv --seeds seeds.csv --out data/companies.jsonl
+   python -m sourcing.cli tune   --seeds seeds.csv          # optional: pick model settings for your data
    python -m sourcing.cli train  --companies data/companies.jsonl --seeds seeds.csv
    python -m sourcing.cli score  --companies data/companies.jsonl --out output/ranked.csv
    ```
@@ -49,6 +50,10 @@ python -m pytest -q
 A missing signal stays missing (NaN), not zero. "Doesn't say how many employees it has" is different from "has zero employees."
 
 **Model** (`sourcing/model.py`). Uses positive-unlabeled bagging. Unlabeled companies aren't negatives: many great fits just haven't been looked at yet. Each of 40 bags trains positives against a random sample of the unlabeled universe, with explicit negatives added at extra weight. The classifier in each bag blends gradient boosting with regularized logistic regression, which stays stable when the training set is small. Scores are averaged across bags.
+
+**Nearest-seed similarity**. The classifier learns one "typical portfolio company". When a portfolio spans many unrelated niches, a second scorer helps: similarity to the *single closest* seed company. `knn_weight` in `config.yaml` blends the two (0 = classifier only, 1 = nearest seed only).
+
+**Tuning**. `python -m sourcing.cli tune --seeds seeds.csv` runs the self-test for several settings (classifier type, text-embedding size, `knn_weight`) on your own data and prints the best one to put in `config.yaml`. Re-run it whenever the seed list changes a lot.
 
 **Evaluation**. Cross-validation hides a fold of your positives *inside* the unlabeled pool, retrains, and checks where they land. This measures what matters: would the model have surfaced a company you liked if you hadn't already found it? Reported as recall in the top 5/10/20% (random = 5/10/20%).
 

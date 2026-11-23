@@ -32,3 +32,22 @@ def test_scrape_cli_seed_url_overrides_universe(tmp_path, monkeypatch):
     got = {d: (n, u) for d, n, u in cap["u"]}
     assert got == {"acme.com": (None, "https://web.archive.org/web/2022/https://acme.com/"),
                    "beta.com": ("Beta", None), "gamma.com": (None, None)}
+
+
+def test_redirect_flag_ignores_port_and_www():
+    from sourcing.pipeline import _redirect
+    assert _redirect({"domain": "securly.com", "redirected_to": "securly.com:443"}) is None
+    assert _redirect({"domain": "acme.com", "redirected_to": "www.acme.com"}) is None
+    assert _redirect({"domain": "sitelink.com", "redirected_to": "storable.com"}) == "storable.com"
+    assert _redirect({"domain": "visuallease.com", "redirected_to": "costar.com",
+                      "start_url": "https://web.archive.org/web/2024/https://visuallease.com/"}) is None
+
+
+def test_knn_finds_lookalike_of_any_seed():
+    import numpy as np
+    from sourcing.model import blend, knn_score
+    # two very different seeds (columns); company 2 is a near-copy of seed B only
+    S = np.array([[-1, 0.0], [0.0, -1], [0.05, 0.9], [0.3, 0.3]])
+    k = knn_score(S)
+    assert k.argmax() == 2
+    assert np.allclose(blend(np.zeros(4), k, 1.0), blend(np.zeros(4), k, 1.0))

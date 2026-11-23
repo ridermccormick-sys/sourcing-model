@@ -10,6 +10,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import warnings
+
+# Harmless on macOS's system Python (LibreSSL); hide so real messages stay readable.
+warnings.filterwarnings("ignore", message=".*OpenSSL.*")
+warnings.filterwarnings("ignore", message="Skipping features without any observed values")
 from pathlib import Path
 
 import joblib
@@ -80,6 +85,52 @@ def cmd_score(a):
     with pd.option_context("display.max_colwidth", 90, "display.width", 250):
         print(df[cols].head(a.show).to_string(index=False))
     print(f"\n{len(df)} companies ranked -> {a.out}")
+
+
+def cmd_tune(a):
+    """Try several model settings on YOUR seeds and report the self-test for each."""
+    import copy
+
+    from .features import Featurizer
+    from .model import cross_validate_pu
+
+    cfg = _cfg(a.config)
+    recs = [r for r in pipeline.load_records(a.companies) if r.get("pages")]
+    seeds = pipeline.load_seeds(a.seeds)
+    y = pipeline._labels(recs, seeds)
+    print(f"positives={int((y == 1).sum())}  negatives={int((y == 0).sum())}  unlabeled={int((y == -1).sum())}")
+    print("Each setting is cross-validated; this takes a few minutes...\n")
+    rows = []
+    rs = cfg["model"]["random_state"]
+    for svd in (16, 48):
+        feat = Featurizer(cfg["thesis"], svd, rs).fit(recs)
+        X, _ = feat.transform(recs)
+        S = pipeline.seed_similarity(feat, recs, y)
+        for clf in ("logreg", "blend"):
+            for w in (0.0, 0.25, 0.5, 0.75, 1.0):
+                if w == 1.0 and (clf != "logreg" or svd != 16):
+                    continue  # nearest-seed only: classifier and SVD size don't matter
+                c = copy.deepcopy(cfg)
+                c["model"].update(classifier=clf, svd_components=svd, n_bags=a.bags)
+                cv = cross_validate_pu(X.values, y, n_folds=c["model"]["cv_folds"], random_state=rs, S=S,
+                                       knn_weight=w, **pipeline._model_params(c))
+                row = {"classifier": clf if w < 1 else "-", "svd_components": svd if w < 1 else "-",
+                       "knn_weight": w, "median_pct": cv["heldout_positive_median_percentile"],
+                       "top10": cv["recall_at_top_10pct"], "top20": cv["recall_at_top_20pct"]}
+                rows.append(row)
+                print(f"  {row['classifier']:>7} svd={str(row['svd_components']):>2} knn_weight={w:.2f}  ->  "
+                      f"median {row['median_pct']:.0%}  top10% {row['top10']:.0%}  top20% {row['top20']:.0%}", flush=True)
+    df = pd.DataFrame(rows).sort_values(["top20", "median_pct", "top10"], ascending=False)
+    b = df.iloc[0]
+    print("\nBest setting (random ranking would score median 50%, top10% 10%, top20% 20%):")
+    print(f"  median {b.median_pct:.0%}   top10% {b.top10:.0%}   top20% {b.top20:.0%}")
+    print("\nPut this in config.yaml under model:")
+    if b.knn_weight < 1:
+        print(f"  classifier: {b.classifier}\n  svd_components: {b.svd_components}")
+    print(f"  knn_weight: {b.knn_weight}")
+    n_pos = int((y == 1).sum())
+    print(f"\nNote: with {n_pos} positives each one is {1 / n_pos:.0%} of recall, so differences "
+          f"under ~{2 / n_pos:.0%} are noise. Prefer the simpler setting when results are close.")
 
 
 def cmd_demo(a):
@@ -155,6 +206,12 @@ def main(argv=None):
     c.add_argument("--show", type=int, default=20)
     c.set_defaults(func=cmd_score)
 
+    u = sub.add_parser("tune", help="compare model settings on your seeds")
+    u.add_argument("--companies", default="data/companies.jsonl")
+    u.add_argument("--seeds", required=True)
+    u.add_argument("--bags", type=int, default=15, help="bags per model while tuning (lower = faster)")
+    u.set_defaults(func=cmd_tune)
+
     d = sub.add_parser("demo", help="run end-to-end on synthetic data")
     d.add_argument("--n", type=int, default=3000)
     d.add_argument("--seed", type=int, default=0)
@@ -163,6 +220,7 @@ def main(argv=None):
 
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger("urllib3").setLevel(logging.ERROR)  # certificate-mismatch noise from broken sites
     a.func(a)
 
 

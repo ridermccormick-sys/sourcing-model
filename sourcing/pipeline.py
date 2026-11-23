@@ -10,7 +10,7 @@ import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 
 from .features import FEATURE_LABELS, MISSING_LABELS, Featurizer, display_name
-from .model import PUBagger, cross_validate_pu, explain
+from .model import PUBagger, blend, cross_validate_pu, explain, knn_score
 from .signals import series_letter_to_int
 
 log = logging.getLogger(__name__)
@@ -57,11 +57,21 @@ def _model_params(cfg: dict) -> dict:
                 negative_weight=m["negative_weight"], classifier=m["classifier"])
 
 
+def seed_similarity(feat: Featurizer, records: list[dict], y: np.ndarray) -> np.ndarray:
+    """(n_companies x n_positive_seeds) website-text cosine similarity; a seed's
+    similarity to itself is set to -1 so it never counts as its own match."""
+    tf = feat.text_matrix(records)
+    P = np.where(y == 1)[0]
+    S = cosine_similarity(tf, tf[P])
+    S[P, np.arange(len(P))] = -1
+    return S
+
+
 def train(records: list[dict], seeds: pd.DataFrame, cfg: dict, run_cv: bool = True) -> dict:
     y = _labels(records, seeds)
     missing = set(seeds["domain"]) - {r["domain"] for r in records}
     if missing:
-        log.warning("%d seed domains have no scraped record (scrape them too): %s",
+        log.warning("%d seed domains have no scraped record (blocked or unreachable; they are skipped): %s",
                     len(missing), sorted(missing)[:10])
     log.info("positives=%d explicit negatives=%d unlabeled=%d",
              (y == 1).sum(), (y == 0).sum(), (y == -1).sum())
@@ -74,7 +84,8 @@ def train(records: list[dict], seeds: pd.DataFrame, cfg: dict, run_cv: bool = Tr
     if run_cv:
         log.info("cross-validating (hiding positives in the unlabeled pool)...")
         cv = cross_validate_pu(X.values, y, n_folds=cfg["model"]["cv_folds"], random_state=rs,
-                               **_model_params(cfg))
+                               S=seed_similarity(feat, records, y),
+                               knn_weight=cfg["model"].get("knn_weight", 0.5), **_model_params(cfg))
     model = PUBagger(random_state=rs, **_model_params(cfg)).fit(X.values, y)
 
     pos = [r for r, l in zip(records, y) if l == 1]
@@ -91,8 +102,22 @@ def train(records: list[dict], seeds: pd.DataFrame, cfg: dict, run_cv: bool = Tr
     }
 
 
-def _flags(sig: pd.Series, filters: dict) -> list[str]:
+def _redirect(rec: dict) -> str | None:
+    """Site the domain now redirects to, if it is a different company's site."""
+    to = rec.get("redirected_to")
+    if not to:
+        return None
+    to = to.split(":")[0].removeprefix("www.")  # older scrapes stored 'host:443'
+    d = rec["domain"]
+    if rec.get("start_url") or to == d or to.endswith("." + d) or d.endswith("." + to):
+        return None
+    return to
+
+
+def _flags(sig: pd.Series, filters: dict, redirect: str | None = None) -> list[str]:
     f = []
+    if redirect:
+        f.append(f"site redirects to {redirect} (acquired or rebranded?)")
     fy, emp, ser = sig["_founded_year"], sig["_employees"], sig["max_series"]
     if fy == fy and not (filters.get("founded_year_min", 0) <= fy <= filters.get("founded_year_max", 9999)):
         f.append(f"founded {int(fy)}")
@@ -114,11 +139,17 @@ def score(records: list[dict], artifact: dict, include_seeds: bool = False) -> p
     X = X.reindex(columns=artifact["columns"])
     p = model.predict(X.values)
 
+    # similarity to the closest positive seed (by website text)
+    sims = cosine_similarity(feat.text_matrix(records), artifact["seed_pos_tfidf"])
+    sims[sims > 0.999] = -1  # a seed company is not its own comparable
+    best = sims.argmax(axis=1)
+    combined = blend(p, knn_score(sims), cfg["model"].get("knn_weight", 0.5))
+
     seed_labels = artifact["seed_labels"]
     in_seed = np.array([r["domain"] in seed_labels for r in records])
     # percentile among non-seed companies -> "fit score" 0-100
-    ref = np.sort(p[~in_seed]) if (~in_seed).any() else np.sort(p)
-    fit_score = 100.0 * np.searchsorted(ref, p, side="right") / len(ref)
+    ref = np.sort(combined[~in_seed]) if (~in_seed).any() else np.sort(combined)
+    fit_score = 100.0 * np.searchsorted(ref, combined, side="right") / len(ref)
 
     df = pd.DataFrame({
         "domain": [r["domain"] for r in records],
@@ -134,20 +165,17 @@ def score(records: list[dict], artifact: dict, include_seeds: bool = False) -> p
         "pricing_model": sig["_pricing_model"],
         "enterprise_score": sig["enterprise_score"],
     })
-    flags = [_flags(sig.iloc[i], cfg.get("filters", {})) for i in range(len(records))]
+    flags = [_flags(sig.iloc[i], cfg.get("filters", {}), _redirect(r)) for i, r in enumerate(records)]
     df["eligible"] = [not f for f in flags]
     df["flags"] = ["; ".join(f) for f in flags]
 
-    # nearest seed comparable (by website text)
-    sims = cosine_similarity(feat.text_matrix(records), artifact["seed_pos_tfidf"])
-    sims[sims > 0.999] = -1  # a seed company is not its own comparable
-    best = sims.argmax(axis=1)
+    df["_combined"] = combined
     df["closest_seed_company"] = [artifact["seed_pos_names"][j] for j in best]
     df["closest_seed_similarity"] = sims[np.arange(len(records)), best].round(3)
 
     if not include_seeds:
         df = df[~in_seed]
-    df = df.sort_values(["eligible", "model_probability"], ascending=[False, False])
+    df = df.sort_values(["eligible", "_combined"], ascending=[False, False])
 
     # explanations for the top N
     n = min(cfg["model"]["explain_top_n"], len(df))
@@ -168,5 +196,6 @@ def score(records: list[dict], artifact: dict, include_seeds: bool = False) -> p
         drag[k] = f"{label(dn[0], row)} ({dn[1]:.2f})" if dn else ""
     df["why"] = why
     df["biggest_drag"] = drag
+    df = df.drop(columns="_combined")
     df.insert(0, "rank", np.arange(1, len(df) + 1))
     return df.reset_index(drop=True)

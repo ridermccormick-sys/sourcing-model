@@ -64,7 +64,8 @@ def unwrap(url: str) -> str:
 
 
 def site_of(url: str) -> str:
-    return urlparse(unwrap(url)).netloc.lower().removeprefix("www.")
+    """Host without port or www. ('securly.com:443' and 'www.securly.com' are the same site)."""
+    return (urlparse(unwrap(url)).hostname or "").lower().removeprefix("www.")
 
 
 class Crawler:

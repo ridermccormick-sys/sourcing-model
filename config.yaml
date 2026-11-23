@@ -38,6 +38,7 @@ scrape:
 
 model:
   classifier: blend       # gbm | logreg | blend
+  knn_weight: 0.5         # 0 = classifier only, 1 = 'closest to any seed' only. Run `tune` to pick.
   n_bags: 40
   unlabeled_ratio: 3.0    # unlabeled sampled per bag = ratio * n_positives
   negative_weight: 2.0    # weight on explicit "passed - off thesis" negatives

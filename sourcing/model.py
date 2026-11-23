@@ -39,7 +39,7 @@ class _Blend:
             gbm.fit(X, y, sample_weight=sample_weight)
             self.models_.append(gbm)
         if self.kind in ("logreg", "blend"):
-            lr = Pipeline([("impute", SimpleImputer(strategy="median", add_indicator=True)),
+            lr = Pipeline([("impute", SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True)),
                            ("scale", StandardScaler()),
                            ("clf", LogisticRegression(C=0.3, max_iter=3000))])
             lr.fit(X, y, clf__sample_weight=sample_weight)
@@ -97,7 +97,42 @@ class PUBagger:
         return np.mean([m.predict_proba(X)[:, 1] for m in self.models_], axis=0)
 
 
-def cross_validate_pu(X, y, n_folds: int = 5, random_state: int = 0, **params) -> dict:
+def pct_rank(x: np.ndarray) -> np.ndarray:
+    """Percentile rank in [0, 1] (ties averaged)."""
+    x = np.asarray(x, dtype=float)
+    order = x.argsort(kind="mergesort")
+    r = np.empty(len(x))
+    r[order] = np.arange(len(x))
+    # average ties
+    _, inv, cnt = np.unique(x, return_inverse=True, return_counts=True)
+    sums = np.bincount(inv, weights=r)
+    return (sums / cnt)[inv] / max(len(x) - 1, 1)
+
+
+def knn_score(S: np.ndarray, cols: np.ndarray | None = None) -> np.ndarray:
+    """Similarity to the single most similar positive seed.
+
+    S is (n_companies x n_positive_seeds) cosine similarity, with each seed's
+    similarity to itself already set to -1. A classifier learns one "average
+    portfolio company"; when the portfolio spans many unrelated niches (K-12
+    safety, youth sports, audit, govtech...), "closest to ANY portfolio company"
+    ranks lookalikes much better.
+    """
+    if cols is not None:
+        S = S[:, cols]
+    return S.max(axis=1) if S.shape[1] else np.zeros(S.shape[0])
+
+
+def blend(pu: np.ndarray, knn: np.ndarray | None, knn_weight: float) -> np.ndarray:
+    if knn is None or knn_weight <= 0:
+        return pct_rank(pu)
+    if knn_weight >= 1:
+        return pct_rank(knn)
+    return (1 - knn_weight) * pct_rank(pu) + knn_weight * pct_rank(knn)
+
+
+def cross_validate_pu(X, y, n_folds: int = 5, random_state: int = 0, S: np.ndarray | None = None,
+                      knn_weight: float = 0.0, **params) -> dict:
     """Hide a fold of positives inside the unlabeled pool, retrain, and measure where
     they land in the ranking. This tests what matters in production: whether a
     great company nobody has labeled yet gets surfaced near the top.
@@ -109,18 +144,26 @@ def cross_validate_pu(X, y, n_folds: int = 5, random_state: int = 0, **params) -
     folds = np.array_split(rng.permutation(P), min(n_folds, len(P)))
     nfolds = np.array_split(rng.permutation(N), min(n_folds, len(N))) if len(N) else [np.array([], int)] * len(folds)
 
+    pos_col = {p: i for i, p in enumerate(P)}  # column of each positive in S
     pos_pct, neg_pct = [], []
     for f, held in enumerate(folds):
         held_n = nfolds[f] if f < len(nfolds) else np.array([], int)
         y_tr = y.copy()
         y_tr[held] = -1      # a hidden positive looks like any other unlabeled company
         y_tr[held_n] = -1
-        model = PUBagger(random_state=random_state + 100 * f, **params).fit(X, y_tr)
-        u_scores = model.predict(X[U])
-        for s in model.predict(X[held]):
-            pos_pct.append((u_scores < s).mean())
-        for s in (model.predict(X[held_n]) if len(held_n) else []):
-            neg_pct.append((u_scores < s).mean())
+        pu = np.zeros(len(y))
+        if knn_weight < 1:
+            pu = PUBagger(random_state=random_state + 100 * f, **params).fit(X, y_tr).predict(X)
+        knn = None
+        if S is not None:
+            train_cols = np.array([pos_col[p] for p in P if p not in set(held)], dtype=int)
+            knn = knn_score(S, train_cols)
+        score = blend(pu, knn, knn_weight)
+        u_scores = score[U]
+        for s_ in score[held]:
+            pos_pct.append((u_scores < s_).mean())
+        for s_ in score[held_n]:
+            neg_pct.append((u_scores < s_).mean())
 
     pos_pct = np.array(pos_pct)
     out = {
